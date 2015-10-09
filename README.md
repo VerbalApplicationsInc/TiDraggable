@@ -2,6 +2,42 @@
 
 An enhanced fork of the original [TiDraggable](https://github.com/pec1985/TiDraggable) module by [Pedro](http://twitter.com/pecdev) [Enrique](https://github.com/pec1985), allows for simple creation of "draggable" views.
 
+## VerbalCare Notes
+
+Many thanks to [Pedro](https://github.com/pec1985) & [Seth](https://github.com/animecyc) for a great repository! Drag & drop is a feature nearly required by mobile applications, and this repo has provided great support in enabling that feature through Titanium.
+
+VerbalCare decided to fork this repository to answer two related issues ([#32](https://github.com/animecyc/TiDraggable/issues/32) & [#14](https://github.com/animecyc/TiDraggable/issues/14)) with a specific use-case of TiDraggable. Our product uses the drag & drop functionality within a ScrollView. The example
+
+```javascript
+DraggableView.draggable.setConfig('enabled', false);
+```
+
+causes `scroll` events to be consumed/ignored by the DraggableView itself, and not passed to the parent. We were not able to scroll when touch events occurred on the DraggableViews that were children elements of a ScrollView. Based off of a thought from [Mike Fogg](https://github.com/mikefogg/TiDraggable/commit/bebd0ddd2836faa08e86f08619b7503977ecc5b0), we use functions `removeGesture()` and `addGesture()` to remove `UIPanGestureRecognizer` on the `DraggableView` so that those events will be bubbled up to the parent when setting `enabled: false` or `enabled: true.`
+
+To initiate, use 
+
+```javascript
+
+// Enabling a view on creation
+draggableView = Draggable.createView({
+    width : 100,
+    height : 100,
+    backgroundColor : 'black',
+    draggable: {
+      enabled: true
+    }
+});
+
+// Disabling a previously created view
+draggableView.draggable.setConfig('enabled', false); // or true
+
+
+```
+
+as one normally would.
+
+_Note_: This is for iOS only. If Android is required in the future, we will update it.
+
 ## Enhancements & Fixes
 
 - Improved drag performance for iOS and Android.

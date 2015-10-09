@@ -58,16 +58,6 @@
     return self;
 }
 
-- (void)proxyDidRelayout:(id)sender
-{
-    BOOL gestureIsAttached = [self.proxy.view.gestureRecognizers containsObject:self.gesture];
-
-    if (! gestureIsAttached && [self.proxy viewReady])
-    {
-        [self.proxy.view addGestureRecognizer:self.gesture];
-    }
-}
-
 - (void)dealloc
 {
     RELEASE_TO_NIL(self.gesture);
@@ -110,157 +100,206 @@
 
     if (didUpdateConfig)
     {
+
         [self correctMappedProxyPositions];
+    }
+
+    // Depending on if enabled or not, add or remove the gesture
+    if ([TiUtils boolValue:[self valueForKey:@"enabled"] def:YES] == NO)
+    {
+        [self removeGesture:args];
+    } 
+    else
+    {
+        [self addGesture:args];
+    }
+}
+
+- (BOOL)isGestureAttached:(id)args
+{
+    return [self.proxy.view.gestureRecognizers containsObject:self.gesture];
+}
+
+- (void)removeGesture:(id)args
+{
+
+    BOOL gestureIsAttached = [self.proxy.view.gestureRecognizers containsObject:self.gesture];
+
+    if (gestureIsAttached && [self.proxy viewReady])
+    {
+        [self.proxy.view removeGestureRecognizer:self.gesture];
+
+        TiViewProxy* panningProxy = (TiViewProxy*)[self.proxy.view proxy];
+
+        [panningProxy fireEvent:@"remove_gesture"];
+    }
+}
+
+- (void)addGesture:(id)args
+{
+
+    BOOL gestureIsAttached = [self.proxy.view.gestureRecognizers containsObject:self.gesture];
+
+    if (! gestureIsAttached && [self.proxy viewReady])
+    {
+        [self.proxy.view addGestureRecognizer:self.gesture];
+
+        TiViewProxy* panningProxy = (TiViewProxy*)[self.proxy.view proxy];
+        
+        [panningProxy fireEvent:@"add_gesture"];
     }
 }
 
 - (void)panDetected:(UIPanGestureRecognizer *)panRecognizer
 {
     ENSURE_UI_THREAD_1_ARG(panRecognizer);
+    
+    BOOL gestureIsAttached = [self.proxy.view.gestureRecognizers containsObject:self.gesture];
 
-    if ([TiUtils boolValue:[self valueForKey:@"enabled"] def:YES] == NO)
+    if (gestureIsAttached)
     {
+
+        NSString* axis = [self valueForKey:@"axis"];
+        NSInteger maxLeft = [[self valueForKey:@"maxLeft"] floatValue];
+        NSInteger minLeft = [[self valueForKey:@"minLeft"] floatValue];
+        NSInteger maxTop = [[self valueForKey:@"maxTop"] floatValue];
+        NSInteger minTop = [[self valueForKey:@"minTop"] floatValue];
+        BOOL hasMaxLeft = [self valueForKey:@"maxLeft"] != nil;
+        BOOL hasMinLeft = [self valueForKey:@"minLeft"] != nil;
+        BOOL hasMaxTop = [self valueForKey:@"maxTop"] != nil;
+        BOOL hasMinTop = [self valueForKey:@"minTop"] != nil;
+        BOOL ensureRight = [TiUtils boolValue:[self valueForKey:@"ensureRight"] def:NO];
+        BOOL ensureBottom = [TiUtils boolValue:[self valueForKey:@"ensureBottom"] def:NO];
+        BOOL cancelAnimations = [TiUtils boolValue:[self valueForKey:@"cancelAnimations"] def:YES];
+
+        if (cancelAnimations && [[self.proxy.view.layer animationKeys] count] > 0)
+        {
+            [self.proxy.view setFrame:[[self.proxy.view.layer presentationLayer] frame]];
+            [self.proxy.view.layer removeAllAnimations];
+        }
+
+        CGPoint translation = [panRecognizer translationInView:self.proxy.view];
+        CGPoint newCenter = self.proxy.view.center;
+        CGSize size = self.proxy.view.frame.size;
+
+        float tmpTranslationX, tmpTranslationY;
+
+        if ([panRecognizer state] == UIGestureRecognizerStateBegan)
+        {
+            touchStart = self.proxy.view.frame.origin;
+        }
+        else if ([panRecognizer state] == UIGestureRecognizerStateEnded)
+        {
+            touchEnd = self.proxy.view.frame.origin;
+        }
+
+        if([[self valueForKey:@"axis"] isEqualToString:@"x"])
+        {
+            tmpTranslationX = translation.x;
+
+            newCenter.x += translation.x;
+            newCenter.y = newCenter.y;
+        }
+        else if([[self valueForKey:@"axis"] isEqualToString:@"y"])
+        {
+            tmpTranslationY = translation.y;
+
+            newCenter.x = newCenter.x;
+            newCenter.y += translation.y;
+        }
+        else
+        {
+            tmpTranslationX = translation.x;
+            tmpTranslationY = translation.y;
+
+            newCenter.x += translation.x;
+            newCenter.y += translation.y;
+        }
+
+        if(hasMaxLeft || hasMaxTop || hasMinLeft || hasMinTop)
+        {
+            if(hasMaxLeft && newCenter.x - size.width / 2 > maxLeft)
+            {
+                newCenter.x = maxLeft + size.width / 2;
+            }
+            else if(hasMinLeft && newCenter.x - size.width / 2 < minLeft)
+            {
+                newCenter.x = minLeft + size.width / 2;
+            }
+
+            if(hasMaxTop && newCenter.y - size.height / 2 > maxTop)
+            {
+                newCenter.y = maxTop + size.height / 2;
+            }
+            else if(hasMinTop && newCenter.y - size.height / 2 < minTop)
+            {
+                newCenter.y = minTop + size.height / 2;
+            }
+        }
+
+        LayoutConstraint* layoutProperties = [self.proxy layoutProperties];
+
+        if ([self valueForKey:@"axis"] == nil || [[self valueForKey:@"axis"] isEqualToString:@"x"])
+        {
+            layoutProperties->left = TiDimensionDip(newCenter.x - size.width / 2);
+
+            if (ensureRight)
+            {
+                layoutProperties->right = TiDimensionDip(layoutProperties->left.value * -1);
+            }
+        }
+
+        if ([self valueForKey:@"axis"] == nil || [[self valueForKey:@"axis"] isEqualToString:@"y"])
+        {
+            layoutProperties->top = TiDimensionDip(newCenter.y - size.height / 2);
+
+            if (ensureBottom)
+            {
+                layoutProperties->bottom = TiDimensionDip(layoutProperties->top.value * -1);
+            }
+        }
+
+        [self.proxy refreshView:nil];
+
+        [panRecognizer setTranslation:CGPointZero inView:self.proxy.view];
+
+        [self mapProxyOriginToCollection:[self valueForKey:@"maps"]
+                        withTranslationX:tmpTranslationX
+                         andTranslationY:tmpTranslationY];
+
+        TiViewProxy* panningProxy = (TiViewProxy*)[self.proxy.view proxy];
+
+        float left = [panningProxy view].frame.origin.x;
+        float top = [panningProxy view].frame.origin.y;
+
+        NSMutableDictionary *tiProps = [NSMutableDictionary dictionaryWithObjectsAndKeys:
+                                        [NSNumber numberWithFloat:left], @"left",
+                                        [NSNumber numberWithFloat:top], @"top",
+                                        [TiUtils pointToDictionary:self.proxy.view.center], @"center",
+                                        [TiUtils pointToDictionary:[panRecognizer velocityInView:self.proxy.view]], @"velocity",
+                                        nil];
+
+        if([panningProxy _hasListeners:@"start"] && [panRecognizer state] == UIGestureRecognizerStateBegan)
+        {
+            [panningProxy fireEvent:@"start" withObject:tiProps];
+        }
+        else if([panningProxy _hasListeners:@"move"] && [panRecognizer state] == UIGestureRecognizerStateChanged)
+        {
+            [panningProxy fireEvent:@"move" withObject:tiProps];
+        }
+        else if([panRecognizer state] == UIGestureRecognizerStateEnded || [panRecognizer state] == UIGestureRecognizerStateCancelled)
+        {
+            [tiProps setValue:[NSDictionary dictionaryWithObjectsAndKeys:
+                               [NSNumber numberWithFloat:touchEnd.x - touchStart.x], @"x",
+                               [NSNumber numberWithFloat:touchEnd.y - touchStart.y], @"y",
+                               nil] forKey:@"distance"];
+
+            [panningProxy fireEvent:([panRecognizer state] == UIGestureRecognizerStateCancelled ? @"cancel" : @"end")
+                         withObject:tiProps];
+        }
         return;
     }
-
-    NSString* axis = [self valueForKey:@"axis"];
-    NSInteger maxLeft = [[self valueForKey:@"maxLeft"] floatValue];
-    NSInteger minLeft = [[self valueForKey:@"minLeft"] floatValue];
-    NSInteger maxTop = [[self valueForKey:@"maxTop"] floatValue];
-    NSInteger minTop = [[self valueForKey:@"minTop"] floatValue];
-    BOOL hasMaxLeft = [self valueForKey:@"maxLeft"] != nil;
-    BOOL hasMinLeft = [self valueForKey:@"minLeft"] != nil;
-    BOOL hasMaxTop = [self valueForKey:@"maxTop"] != nil;
-    BOOL hasMinTop = [self valueForKey:@"minTop"] != nil;
-    BOOL ensureRight = [TiUtils boolValue:[self valueForKey:@"ensureRight"] def:NO];
-    BOOL ensureBottom = [TiUtils boolValue:[self valueForKey:@"ensureBottom"] def:NO];
-    BOOL cancelAnimations = [TiUtils boolValue:[self valueForKey:@"cancelAnimations"] def:YES];
-
-    if (cancelAnimations && [[self.proxy.view.layer animationKeys] count] > 0)
-    {
-        [self.proxy.view setFrame:[[self.proxy.view.layer presentationLayer] frame]];
-        [self.proxy.view.layer removeAllAnimations];
-    }
-
-    CGPoint translation = [panRecognizer translationInView:self.proxy.view];
-    CGPoint newCenter = self.proxy.view.center;
-    CGSize size = self.proxy.view.frame.size;
-
-    float tmpTranslationX, tmpTranslationY;
-
-    if ([panRecognizer state] == UIGestureRecognizerStateBegan)
-    {
-        touchStart = self.proxy.view.frame.origin;
-    }
-    else if ([panRecognizer state] == UIGestureRecognizerStateEnded)
-    {
-        touchEnd = self.proxy.view.frame.origin;
-    }
-
-    if([[self valueForKey:@"axis"] isEqualToString:@"x"])
-    {
-        tmpTranslationX = translation.x;
-
-        newCenter.x += translation.x;
-        newCenter.y = newCenter.y;
-    }
-    else if([[self valueForKey:@"axis"] isEqualToString:@"y"])
-    {
-        tmpTranslationY = translation.y;
-
-        newCenter.x = newCenter.x;
-        newCenter.y += translation.y;
-    }
-    else
-    {
-        tmpTranslationX = translation.x;
-        tmpTranslationY = translation.y;
-
-        newCenter.x += translation.x;
-        newCenter.y += translation.y;
-    }
-
-    if(hasMaxLeft || hasMaxTop || hasMinLeft || hasMinTop)
-    {
-        if(hasMaxLeft && newCenter.x - size.width / 2 > maxLeft)
-        {
-            newCenter.x = maxLeft + size.width / 2;
-        }
-        else if(hasMinLeft && newCenter.x - size.width / 2 < minLeft)
-        {
-            newCenter.x = minLeft + size.width / 2;
-        }
-
-        if(hasMaxTop && newCenter.y - size.height / 2 > maxTop)
-        {
-            newCenter.y = maxTop + size.height / 2;
-        }
-        else if(hasMinTop && newCenter.y - size.height / 2 < minTop)
-        {
-            newCenter.y = minTop + size.height / 2;
-        }
-    }
-
-    LayoutConstraint* layoutProperties = [self.proxy layoutProperties];
-
-    if ([self valueForKey:@"axis"] == nil || [[self valueForKey:@"axis"] isEqualToString:@"x"])
-    {
-        layoutProperties->left = TiDimensionDip(newCenter.x - size.width / 2);
-
-        if (ensureRight)
-        {
-            layoutProperties->right = TiDimensionDip(layoutProperties->left.value * -1);
-        }
-    }
-
-    if ([self valueForKey:@"axis"] == nil || [[self valueForKey:@"axis"] isEqualToString:@"y"])
-    {
-        layoutProperties->top = TiDimensionDip(newCenter.y - size.height / 2);
-
-        if (ensureBottom)
-        {
-            layoutProperties->bottom = TiDimensionDip(layoutProperties->top.value * -1);
-        }
-    }
-
-    [self.proxy refreshView:nil];
-
-    [panRecognizer setTranslation:CGPointZero inView:self.proxy.view];
-
-    [self mapProxyOriginToCollection:[self valueForKey:@"maps"]
-                    withTranslationX:tmpTranslationX
-                     andTranslationY:tmpTranslationY];
-
-    TiViewProxy* panningProxy = (TiViewProxy*)[self.proxy.view proxy];
-
-    float left = [panningProxy view].frame.origin.x;
-    float top = [panningProxy view].frame.origin.y;
-
-    NSMutableDictionary *tiProps = [NSMutableDictionary dictionaryWithObjectsAndKeys:
-                                    [NSNumber numberWithFloat:left], @"left",
-                                    [NSNumber numberWithFloat:top], @"top",
-                                    [TiUtils pointToDictionary:self.proxy.view.center], @"center",
-                                    [TiUtils pointToDictionary:[panRecognizer velocityInView:self.proxy.view]], @"velocity",
-                                    nil];
-
-    if([panningProxy _hasListeners:@"start"] && [panRecognizer state] == UIGestureRecognizerStateBegan)
-    {
-        [panningProxy fireEvent:@"start" withObject:tiProps];
-    }
-    else if([panningProxy _hasListeners:@"move"] && [panRecognizer state] == UIGestureRecognizerStateChanged)
-    {
-        [panningProxy fireEvent:@"move" withObject:tiProps];
-    }
-    else if([panRecognizer state] == UIGestureRecognizerStateEnded || [panRecognizer state] == UIGestureRecognizerStateCancelled)
-    {
-        [tiProps setValue:[NSDictionary dictionaryWithObjectsAndKeys:
-                           [NSNumber numberWithFloat:touchEnd.x - touchStart.x], @"x",
-                           [NSNumber numberWithFloat:touchEnd.y - touchStart.y], @"y",
-                           nil] forKey:@"distance"];
-
-        [panningProxy fireEvent:([panRecognizer state] == UIGestureRecognizerStateCancelled ? @"cancel" : @"end")
-                     withObject:tiProps];
-    }
+    return;
 }
 
 - (void)correctMappedProxyPositions
