@@ -2,7 +2,6 @@
 
 build/
 tmp/
-*.zip
 
 # iOS
 
